@@ -342,7 +342,7 @@ Resources:
             Iops: 3000
             Encrypted: true
             DeleteOnTermination: true
-            PropagateTagsToVolumeOnCreation: true
+      PropagateTagsToVolumeOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-app-01"
