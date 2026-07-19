@@ -1,0 +1,431 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  BLON ENTERPRISES - Socle AWS NonProd. Cree un VPC multi-AZ sans NAT Gateway,
+  deux subnets publics, deux subnets prives, un Security Group web, un role SSM,
+  une instance EC2 Amazon Linux 2023 avec EBS chiffre et une Elastic IP.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Identification
+        Parameters:
+          - ProjectName
+          - Environment
+      - Label:
+          default: Reseau
+        Parameters:
+          - VpcCidr
+          - PublicSubnet1Cidr
+          - PublicSubnet2Cidr
+          - PrivateSubnet1Cidr
+          - PrivateSubnet2Cidr
+      - Label:
+          default: Instance EC2
+        Parameters:
+          - InstanceType
+          - LatestAmiId
+          - RootVolumeSize
+    ParameterLabels:
+      LatestAmiId:
+        default: AMI Amazon Linux 2023 x86_64
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: blon
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: Prefixe utilise pour nommer les ressources.
+
+  Environment:
+    Type: String
+    Default: nonprod
+    AllowedValues:
+      - nonprod
+      - prod
+    Description: Environnement cible.
+
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.20.10.0/24
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.20.20.0/24
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.20.110.0/24
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.20.120.0/24
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.micro
+      - t3.small
+    Description: >-
+      Type x86_64 compatible avec l'AMI selectionnee. Verifier l'eligibilite
+      Free Tier affichee dans le compte avant le deploiement.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Parametre public SSM pointant vers la derniere AMI AL2023 x86_64.
+
+  RootVolumeSize:
+    Type: Number
+    Default: 30
+    MinValue: 20
+    MaxValue: 100
+    Description: Taille en Gio du volume racine gp3.
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-vpc"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-igw"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnet1Cidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-public-a"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:tier"
+          Value: public
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnet2Cidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-public-b"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:tier"
+          Value: public
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-private-a"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:tier"
+          Value: private
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-private-b"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:tier"
+          Value: private
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-public-rt"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-private-rt"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-${Environment}-web-sg"
+      GroupDescription: Acces HTTP et HTTPS public aux applications BLON NonProd
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - Description: HTTP public
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: HTTPS public
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Sortie Internet necessaire aux mises a jour, SSM et images Docker
+          IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-web-sg"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  EC2SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-ec2-ssm-role"
+      Description: Acces Systems Manager pour l'instance applicative BLON NonProd
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Tags:
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-${Environment}-ec2-profile"
+      Roles:
+        - !Ref EC2SSMRole
+
+  ApplicationInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - PublicDefaultRoute
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref WebSecurityGroup
+      DisableApiTermination: true
+      DisableApiStop: true
+      EbsOptimized: true
+      CreditSpecification:
+        CPUCredits: standard
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+        InstanceMetadataTags: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref RootVolumeSize
+            Iops: 3000
+            Throughput: 125
+            Encrypted: true
+            DeleteOnTermination: true
+      PropagateTagsToVolumeOnCreation: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-app-01"
+        - Key: "blon:entity"
+          Value: ventures
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  ApplicationElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref ApplicationInstance
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-app-eip"
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+Outputs:
+  VpcId:
+    Description: Identifiant du VPC BLON NonProd
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+
+  PublicSubnet1Id:
+    Description: Subnet public principal de l'instance
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet1Id"
+
+  PublicSubnet2Id:
+    Description: Second subnet public reserve aux evolutions multi-AZ
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet2Id"
+
+  PrivateSubnet1Id:
+    Description: Premier subnet prive reserve aux evolutions
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1Id"
+
+  PrivateSubnet2Id:
+    Description: Second subnet prive reserve aux evolutions
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2Id"
+
+  SecurityGroupId:
+    Description: Security Group web associe a l'instance
+    Value: !Ref WebSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-WebSecurityGroupId"
+
+  InstanceId:
+    Description: Identifiant de l'instance applicative
+    Value: !Ref ApplicationInstance
+
+  InstanceRoleArn:
+    Description: ARN du role IAM porte par l'instance
+    Value: !GetAtt EC2SSMRole.Arn
+
+  ElasticIPAddress:
+    Description: Adresse IPv4 publique fixe de l'instance
+    Value: !Ref ApplicationElasticIP
+
+  HTTPURL:
+    Description: URL HTTP temporaire avant configuration Route 53 et HTTPS
+    Value: !Sub "http://${ApplicationElasticIP}"

@@ -1,0 +1,24 @@
+# Fichiers systeme et editeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Sorties et artefacts CloudFormation
+.aws-sam/
+packaged.yaml
+*.changeset.json
+
+# Secrets et credentials locaux
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+
+# Terraform eventuel
+.terraform/
+*.tfstate
+*.tfstate.*
+
