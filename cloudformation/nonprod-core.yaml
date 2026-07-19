@@ -326,7 +326,6 @@ Resources:
       SecurityGroupIds:
         - !Ref WebSecurityGroup
       DisableApiTermination: true
-      DisableApiStop: true
       EbsOptimized: true
       CreditSpecification:
         CPUCredits: standard
@@ -344,7 +343,6 @@ Resources:
             Throughput: 125
             Encrypted: true
             DeleteOnTermination: true
-      PropagateTagsToVolumeOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-app-01"
