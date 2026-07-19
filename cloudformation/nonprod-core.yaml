@@ -340,9 +340,9 @@ Resources:
             VolumeType: gp3
             VolumeSize: !Ref RootVolumeSize
             Iops: 3000
-            Throughput: 125
             Encrypted: true
             DeleteOnTermination: true
+            PropagateTagsToVolumeOnCreation: true
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-app-01"
