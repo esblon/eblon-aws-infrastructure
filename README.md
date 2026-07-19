@@ -17,6 +17,7 @@ AWS Europe (Paris), `eu-west-3`.
 - un role IAM EC2 limite a Systems Manager ;
 - un profil d'instance IAM ;
 - une EC2 Amazon Linux 2023 x86_64 `t3.small` ;
+- Docker installe et active par AWS Systems Manager State Manager ;
 - un volume EBS `gp3` chiffre de 30 Gio ;
 - une Elastic IP associee a l'EC2.
 
@@ -30,7 +31,7 @@ Manager Session Manager.
 - RDS PostgreSQL ;
 - Route 53 et nom de domaine ;
 - certificat HTTPS ;
-- Docker et les applications ;
+- Docker Compose et les applications ;
 - sauvegardes S3 ;
 - CloudWatch Agent ;
 - ressources de production.
@@ -116,6 +117,41 @@ aws cloudformation describe-stacks \
 Le template ne cree ni paire de cles ni acces SSH. Il utilise exclusivement
 AWS Systems Manager Session Manager. Cette decision evite de placer une cle
 privee dans CloudFormation ou Git et maintient le port 22 ferme.
+
+## Docker
+
+Le template installe Docker sur l'instance avec une association AWS Systems
+Manager State Manager fondee sur le document `AWS-RunShellScript`. Les commandes
+sont idempotentes : Docker est installe avec `dnf` seulement s'il est absent,
+puis `docker.service` est active, demarre et verifie.
+
+L'utilisateur `ssm-user` n'est pas ajoute au groupe `docker`. Utiliser `sudo`
+pour administrer Docker depuis une session Systems Manager :
+
+```bash
+sudo docker --version
+sudo docker info
+```
+
+Pour verifier l'etat de l'association depuis AWS CLI :
+
+```powershell
+$associationId = aws ssm list-associations `
+  --association-filter-list "key=AssociationName,value=blon-nonprod-docker-install" `
+  --query "Associations[0].AssociationId" `
+  --output text `
+  --region eu-west-3 `
+  --profile blon-nonprod
+
+aws ssm describe-association `
+  --association-id $associationId `
+  --query "AssociationDescription.{Status:Overview.Status,LastExecutionDate:LastExecutionDate,Targets:Targets}" `
+  --region eu-west-3 `
+  --profile blon-nonprod
+```
+
+Le statut attendu est `Success`. En cas d'echec, consulter l'historique des
+executions de l'association dans Systems Manager, sous State Manager.
 
 ## Free Tier et credits
 

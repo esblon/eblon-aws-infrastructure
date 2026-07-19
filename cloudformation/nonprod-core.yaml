@@ -357,6 +357,31 @@ Resources:
         - Key: "blon:managed-by"
           Value: cloudformation
 
+  DockerInstallationAssociation:
+    Type: AWS::SSM::Association
+    Properties:
+      AssociationName: !Sub "${ProjectName}-${Environment}-docker-install"
+      Name: AWS-RunShellScript
+      Parameters:
+        commands:
+          - |-
+            set -euo pipefail
+
+            if command -v docker >/dev/null 2>&1; then
+              echo "Docker is already installed."
+            else
+              echo "Installing Docker."
+              dnf install -y docker
+            fi
+
+            systemctl enable --now docker.service
+            systemctl is-active --quiet docker.service
+            docker --version
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref ApplicationInstance
+
   ApplicationElasticIP:
     Type: AWS::EC2::EIP
     DependsOn: VPCGatewayAttachment
