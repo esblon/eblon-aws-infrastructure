@@ -17,7 +17,7 @@ AWS Europe (Paris), `eu-west-3`.
 - un role IAM EC2 limite a Systems Manager ;
 - un profil d'instance IAM ;
 - une EC2 Amazon Linux 2023 x86_64 `t3.small` ;
-- Docker installe et active par AWS Systems Manager State Manager ;
+- Docker et Docker Compose installes par AWS Systems Manager State Manager ;
 - un volume EBS `gp3` chiffre de 30 Gio ;
 - une Elastic IP associee a l'EC2.
 
@@ -31,7 +31,7 @@ Manager Session Manager.
 - RDS PostgreSQL ;
 - Route 53 et nom de domaine ;
 - certificat HTTPS ;
-- Docker Compose et les applications ;
+- applications conteneurisees ;
 - sauvegardes S3 ;
 - CloudWatch Agent ;
 - ressources de production.
@@ -125,12 +125,21 @@ Manager State Manager fondee sur le document `AWS-RunShellScript`. Les commandes
 sont idempotentes : Docker est installe avec `dnf` seulement s'il est absent,
 puis `docker.service` est active, demarre et verifie.
 
+Le paquet `docker-compose-plugin` n'etant pas disponible dans les depots
+Amazon Linux 2023 utilises par l'instance, le template installe manuellement le
+plugin Docker Compose officiel. La version `v5.3.1` est epinglee globalement
+dans `/usr/local/lib/docker/cli-plugins/docker-compose`, pour `x86_64`
+uniquement. Sa somme SHA-256 officielle est verifiee avant installation. Si le
+binaire deja installe possede la somme attendue, il n'est pas telecharge de
+nouveau.
+
 L'utilisateur `ssm-user` n'est pas ajoute au groupe `docker`. Utiliser `sudo`
 pour administrer Docker depuis une session Systems Manager :
 
 ```bash
 sudo docker --version
 sudo docker info
+sudo docker compose version
 ```
 
 Pour verifier l'etat de l'association depuis AWS CLI :
