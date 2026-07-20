@@ -24,11 +24,11 @@ Metadata:
           default: Instance EC2
         Parameters:
           - InstanceType
-          - LatestAmiId
+          - ApplicationAmiId
           - RootVolumeSize
     ParameterLabels:
-      LatestAmiId:
-        default: AMI Amazon Linux 2023 x86_64
+      ApplicationAmiId:
+        default: AMI Amazon Linux 2023 x86_64 epinglee
 
 Parameters:
   ProjectName:
@@ -75,10 +75,10 @@ Parameters:
       Type x86_64 compatible avec l'AMI selectionnee. Verifier l'eligibilite
       Free Tier affichee dans le compte avant le deploiement.
 
-  LatestAmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: Parametre public SSM pointant vers la derniere AMI AL2023 x86_64.
+  ApplicationAmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-09118d6bc8642c974
+    Description: AMI AL2023 x86_64 epinglee pour l'instance applicative NonProd. Toute mise a jour doit etre volontaire et verifiee par Change Set.
 
   RootVolumeSize:
     Type: Number
@@ -88,6 +88,58 @@ Parameters:
     Description: Taille en Gio du volume racine gp3.
 
 Resources:
+  BibliothequeRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${ProjectName}/eblon-bibliotheque"
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageTagMutability: IMMUTABLE
+      EmptyOnDelete: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Conserver les 10 images les plus recentes",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: "blon:project"
+          Value: !Ref ProjectName
+        - Key: "blon:application"
+          Value: eblon-bibliotheque
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  ECRRegistryScanningConfiguration:
+    Type: AWS::ECR::RegistryScanningConfiguration
+    Properties:
+      ScanType: BASIC
+      Rules:
+        - ScanFrequency: SCAN_ON_PUSH
+          RepositoryFilters:
+            - Filter: !Sub "${ProjectName}/*"
+              FilterType: WILDCARD
+
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -297,6 +349,23 @@ Resources:
               - sts:AssumeRole
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-${Environment}-bibliotheque-ecr-pull"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ECRAuthorizationToken
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PullBibliothequeImages
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: !GetAtt BibliothequeRepository.Arn
       Tags:
         - Key: "blon:environment"
           Value: !Ref Environment
@@ -319,7 +388,7 @@ Resources:
     DependsOn:
       - PublicDefaultRoute
     Properties:
-      ImageId: !Ref LatestAmiId
+      ImageId: !Ref ApplicationAmiId
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref EC2InstanceProfile
       SubnetId: !Ref PublicSubnet1
@@ -434,6 +503,18 @@ Resources:
           Value: cloudformation
 
 Outputs:
+  BibliothequeRepositoryName:
+    Description: Nom du depot ECR prive de l'application eblon-bibliotheque
+    Value: !Ref BibliothequeRepository
+
+  BibliothequeRepositoryUri:
+    Description: URI complete du depot ECR prive de l'application eblon-bibliotheque
+    Value: !GetAtt BibliothequeRepository.RepositoryUri
+
+  BibliothequeRepositoryArn:
+    Description: ARN du depot ECR prive de l'application eblon-bibliotheque
+    Value: !GetAtt BibliothequeRepository.Arn
+
   VpcId:
     Description: Identifiant du VPC BLON NonProd
     Value: !Ref VPC

@@ -20,9 +20,21 @@ AWS Europe (Paris), `eu-west-3`.
 - Docker et Docker Compose installes par AWS Systems Manager State Manager ;
 - un volume EBS `gp3` chiffre de 30 Gio ;
 - une Elastic IP associee a l'EC2.
+- un depot ECR prive `blon/eblon-bibliotheque` chiffre avec AES256 ;
+- des tags d'image immuables et une politique conservant les 10 images les plus recentes ;
+- une analyse ECR BASIC a chaque push pour les depots `blon/*` ;
+- des permissions EC2 limitees au telechargement depuis ce seul depot ECR.
 
 Le template n'ouvre pas SSH 22. L'administration se fait avec AWS Systems
 Manager Session Manager.
+
+L'AMI Amazon Linux 2023 de l'instance est volontairement epinglee par le
+parametre `ApplicationAmiId`. Le template n'utilise jamais le parametre public
+SSM `latest`, afin qu'une publication d'AMI par AWS ne provoque pas un
+remplacement automatique de l'EC2 pendant une mise a jour ordinaire. Toute
+modification de `ApplicationAmiId` remplace `ApplicationInstance` : une mise a
+niveau d'AMI doit donc etre volontaire et toujours passer par un Change Set
+examine avant execution.
 
 ## Ce qui n'est pas encore cree
 
@@ -35,6 +47,52 @@ Manager Session Manager.
 - sauvegardes S3 ;
 - CloudWatch Agent ;
 - ressources de production.
+
+## Depot ECR eblon-bibliotheque
+
+Le depot ECR est nomme a partir du parametre `ProjectName` et produit actuellement
+`blon/eblon-bibliotheque`. Son chiffrement AES256 est explicite. Les tags sont
+immuables : une image deja publiee sous un tag donne ne peut pas etre remplacee.
+La politique de cycle de vie conserve les 10 images les plus recemment poussees
+et fait expirer les plus anciennes.
+
+L'analyse du registre est de type BASIC, declenchee a chaque push et limitee au
+filtre `blon/*`. Cette configuration agit au niveau du registre ECR du compte.
+L'instance EC2 possede seulement `GetAuthorizationToken` et les trois actions de
+pull necessaires, limitees a l'ARN du depot pour les operations sur les images.
+Elle ne dispose d'aucune permission de push.
+
+`DeletionPolicy: Retain` et `UpdateReplacePolicy: Retain` conservent le depot et
+ses images si la ressource est retiree de la stack ou remplacee. `EmptyOnDelete`
+reste desactive.
+
+Apres application future de la stack, recuperer l'URI depuis ses Outputs :
+
+```powershell
+$repositoryUri = aws cloudformation describe-stacks `
+  --stack-name blon-nonprod-core `
+  --query "Stacks[0].Outputs[?OutputKey=='BibliothequeRepositoryUri'].OutputValue | [0]" `
+  --output text `
+  --region eu-west-3 `
+  --profile blon-nonprod
+```
+
+Commandes futures de connexion, tag et push, a ne lancer qu'apres validation du
+Change Set et construction locale de l'image. Utiliser un tag immuable derive du
+commit Git plutot que `latest` :
+
+```powershell
+$registry = $repositoryUri.Split('/')[0]
+$imageTag = git rev-parse --short=12 HEAD
+
+aws ecr get-login-password `
+  --region eu-west-3 `
+  --profile blon-nonprod |
+  docker login --username AWS --password-stdin $registry
+
+docker tag eblon-bibliotheque:uat "${repositoryUri}:${imageTag}"
+docker push "${repositoryUri}:${imageTag}"
+```
 
 ## Arborescence
 
@@ -77,6 +135,23 @@ aws cloudformation validate-template \
 ```
 
 ## Deploiement par AWS CLI
+
+Pour preparer la mise a jour sans l'executer, creer uniquement un Change Set :
+
+```powershell
+aws cloudformation create-change-set `
+  --stack-name blon-nonprod-core `
+  --change-set-name ecr-bibliotheque-$(Get-Date -Format 'yyyyMMdd-HHmmss') `
+  --change-set-type UPDATE `
+  --template-body file://cloudformation/nonprod-core.yaml `
+  --parameters file://cloudformation/parameters/nonprod.json `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --description "Ajout du depot ECR eblon-bibliotheque et des permissions EC2 de pull" `
+  --region eu-west-3 `
+  --profile blon-nonprod
+```
+
+Cette commande cree seulement le Change Set. Elle ne l'execute pas.
 
 Depuis la racine du depot :
 
