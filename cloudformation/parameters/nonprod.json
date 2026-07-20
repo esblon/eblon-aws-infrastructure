@@ -32,8 +32,11 @@
     "ParameterValue": "t3.small"
   },
   {
+    "ParameterKey": "ApplicationAmiId",
+    "ParameterValue": "ami-09118d6bc8642c974"
+  },
+  {
     "ParameterKey": "RootVolumeSize",
     "ParameterValue": "30"
   }
 ]
-
