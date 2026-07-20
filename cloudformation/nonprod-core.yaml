@@ -366,6 +366,11 @@ Resources:
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
                 Resource: !GetAtt BibliothequeRepository.Arn
+              - Sid: ReadBibliothequeRuntimeConfiguration
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/blon/${Environment}/bibliotheque/runtime/app-env"
       Tags:
         - Key: "blon:environment"
           Value: !Ref Environment
@@ -484,6 +489,44 @@ Resources:
           Values:
             - !Ref ApplicationInstance
 
+  BibliothequeRuntimeConfigAssociation:
+    Type: AWS::SSM::Association
+    DependsOn:
+      - EC2SSMRole
+    Properties:
+      AssociationName: !Sub "${ProjectName}-${Environment}-bibliotheque-runtime-config"
+      Name: AWS-RunShellScript
+      Parameters:
+        commands:
+          - !Sub |-
+              set -euo pipefail
+
+              runtime_dir="/opt/blon/bibliotheque/runtime"
+              install -d -o root -g root -m 0750 "$runtime_dir"
+
+              temp_file=$(mktemp "$runtime_dir/.app.env.XXXXXX")
+              trap 'rm -f "$temp_file"' EXIT HUP INT TERM
+
+              aws ssm get-parameter \
+                --name "/blon/${Environment}/bibliotheque/runtime/app-env" \
+                --with-decryption \
+                --query Parameter.Value \
+                --output text \
+                --region "${AWS::Region}" \
+                > "$temp_file"
+
+              test -s "$temp_file"
+              chown root:root "$temp_file"
+              chmod 0600 "$temp_file"
+              mv -f "$temp_file" "$runtime_dir/app.env"
+              trap - EXIT HUP INT TERM
+
+              echo "Bibliotheque runtime configuration installed successfully."
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref ApplicationInstance
+
   ApplicationElasticIP:
     Type: AWS::EC2::EIP
     DependsOn: VPCGatewayAttachment
@@ -514,6 +557,10 @@ Outputs:
   BibliothequeRepositoryArn:
     Description: ARN du depot ECR prive de l'application eblon-bibliotheque
     Value: !GetAtt BibliothequeRepository.Arn
+
+  BibliothequeRuntimeConfigAssociationId:
+    Description: Identifiant de l'association State Manager preparant la configuration runtime de la bibliotheque
+    Value: !Ref BibliothequeRuntimeConfigAssociation
 
   VpcId:
     Description: Identifiant du VPC BLON NonProd
