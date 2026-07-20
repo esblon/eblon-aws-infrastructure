@@ -237,6 +237,56 @@ aws ssm describe-association `
 Le statut attendu est `Success`. En cas d'echec, consulter l'historique des
 executions de l'association dans Systems Manager, sous State Manager.
 
+## Configuration runtime de la bibliotheque
+
+La configuration runtime complete de l'application est conservee dans le
+SecureString Parameter Store `/blon/nonprod/bibliotheque/runtime/app-env`. Sa
+valeur ne doit jamais etre affichee, journalisee ou versionnee. Le role de l'EC2
+dispose uniquement de `ssm:GetParameter` sur l'ARN exact de ce parametre ; aucun
+acces par chemin, wildcard ou permission KMS supplementaire n'est accorde.
+
+L'association State Manager
+`blon-nonprod-bibliotheque-runtime-config` recupere la valeur avec dechiffrement
+et l'installe dans `/opt/blon/bibliotheque/runtime/app.env`. Le repertoire est
+propriete de `root:root` avec le mode `0750`. Le fichier final est `root:root`
+avec le mode `0600`.
+
+L'ecriture utilise un fichier temporaire cree dans le meme repertoire, verifie
+qu'il n'est pas vide, applique les permissions restrictives, puis effectue un
+deplacement atomique vers `app.env`. Le temporaire est supprime automatiquement
+en cas d'echec. L'association n'a pas de planification : elle s'applique lors de
+sa creation ou de sa mise a jour et s'executera lorsque l'instance arretee
+redeviendra Online dans Systems Manager.
+
+Retrouver l'association et verifier son statut sans lire le SecureString :
+
+```powershell
+$runtimeAssociationId = aws ssm list-associations `
+  --association-filter-list "key=AssociationName,value=blon-nonprod-bibliotheque-runtime-config" `
+  --query "Associations[0].AssociationId" `
+  --output text `
+  --region eu-west-3 `
+  --profile blon-nonprod
+
+aws ssm describe-association `
+  --association-id $runtimeAssociationId `
+  --query "AssociationDescription.{Status:Overview.Status,LastExecutionDate:LastExecutionDate,Targets:Targets}" `
+  --region eu-west-3 `
+  --profile blon-nonprod
+```
+
+Sur l'EC2, verifier uniquement les metadonnees du fichier :
+
+```bash
+sudo stat /opt/blon/bibliotheque/runtime/app.env
+```
+
+Il est explicitement interdit d'afficher son contenu. Ne jamais executer :
+
+```bash
+cat /opt/blon/bibliotheque/runtime/app.env
+```
+
 ## Free Tier et credits
 
 Le type par defaut est `t3.small`, actuellement liste parmi les instances
