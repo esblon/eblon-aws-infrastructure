@@ -109,11 +109,11 @@ Parameters:
     Type: String
     Default: Europe/Paris
     Description: Fuseau IANA utilise pour les horaires EC2.
-    
-Resources:
+
 Conditions:
   IsNonProd: !Equals [!Ref Environment, nonprod]
   
+Resources:
   BibliothequeRepository:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
