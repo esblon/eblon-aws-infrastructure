@@ -2,6 +2,12 @@
 # Images applicatives immuables : commit 40f9c67db3dc
 # Execution : PowerShell depuis n'importe quel repertoire du poste local.
 
+[CmdletBinding()]
+param(
+  [ValidatePattern('^[^@\s]+@[^@\s]+\.[^@\s]+$')]
+  [string] $EmailFrom = "bibliotheque@blon-enterprises.com"
+)
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $ProgressPreference = "SilentlyContinue"
@@ -17,6 +23,8 @@ $runtimeTag        = "40f9c67db3dc-runtime-amd64"
 $migrationTag      = "40f9c67db3dc-migration-amd64"
 $domain            = "blon-enterprises.com"
 $fqdn              = "uat.biblio.blon-enterprises.com"
+$runtimeParameterName = "/blon/nonprod/bibliotheque/runtime/app-env"
+$resendApiKeyParameterName = "/blon/uat/eblon-bibliotheque/resend-api-key"
 
 function ConvertFrom-AwsJson {
   param(
@@ -35,6 +43,177 @@ function ConvertFrom-AwsJson {
   }
 
   return (($output -join "`n") | ConvertFrom-Json)
+}
+
+function Set-DotEnvValue {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string] $Content,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[A-Z][A-Z0-9_]*$')]
+    [string] $Name,
+
+    [Parameter(Mandatory = $true)]
+    [string] $Value
+  )
+
+  if ($Value -match "[`r`n]") {
+    throw "La valeur de $Name contient un retour a la ligne interdit"
+  }
+
+  $normalizedContent = $Content.Replace("`r`n", "`n").Replace("`r", "`n")
+  $lines = [regex]::Split($normalizedContent, "`n")
+  $result = [System.Collections.Generic.List[string]]::new()
+  $pattern = "^$([regex]::Escape($Name))="
+  $written = $false
+
+  foreach ($line in $lines) {
+    if ($line -match $pattern) {
+      if (-not $written) {
+        [void] $result.Add("${Name}=${Value}")
+        $written = $true
+      }
+
+      continue
+    }
+
+    [void] $result.Add($line)
+  }
+
+  if (-not $written) {
+    [void] $result.Add("${Name}=${Value}")
+  }
+
+  return (($result -join "`n").TrimEnd([char[]] ("`n")) + "`n")
+}
+
+function Update-BibliothequeRuntimeParameter {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string] $RuntimeParameterName,
+
+    [Parameter(Mandatory = $true)]
+    [string] $ResendApiKeyParameterName,
+
+    [Parameter(Mandatory = $true)]
+    [string] $EmailFrom,
+
+    [Parameter(Mandatory = $true)]
+    [string] $Region,
+
+    [Parameter(Mandatory = $true)]
+    [string] $Profile
+  )
+
+  $runtimeParameter = ConvertFrom-AwsJson `
+    -AwsArguments @(
+      "ssm", "get-parameter",
+      "--name", $RuntimeParameterName,
+      "--with-decryption",
+      "--region", $Region,
+      "--profile", $Profile,
+      "--output", "json",
+      "--no-cli-pager"
+    ) `
+    -FailureMessage "Lecture du SecureString runtime impossible : $RuntimeParameterName"
+
+  $resendParameter = ConvertFrom-AwsJson `
+    -AwsArguments @(
+      "ssm", "get-parameter",
+      "--name", $ResendApiKeyParameterName,
+      "--with-decryption",
+      "--region", $Region,
+      "--profile", $Profile,
+      "--output", "json",
+      "--no-cli-pager"
+    ) `
+    -FailureMessage "Lecture du SecureString Resend impossible : $ResendApiKeyParameterName"
+
+  if ($runtimeParameter.Parameter.Type -ne "SecureString") {
+    throw "Le parametre runtime n'est pas un SecureString"
+  }
+
+  if ($resendParameter.Parameter.Type -ne "SecureString") {
+    throw "Le parametre Resend n'est pas un SecureString"
+  }
+
+  $runtimeValue = [string] $runtimeParameter.Parameter.Value
+  $resendApiKey = [string] $resendParameter.Parameter.Value
+
+  if ([string]::IsNullOrWhiteSpace($runtimeValue)) {
+    throw "Le SecureString runtime est vide"
+  }
+
+  if ($resendApiKey -notmatch '^re_[^\s]+$') {
+    throw "La valeur du SecureString Resend n'a pas le format attendu"
+  }
+
+  $updatedRuntimeValue = Set-DotEnvValue `
+    -Content $runtimeValue `
+    -Name "EMAIL_ENABLED" `
+    -Value "true"
+  $updatedRuntimeValue = Set-DotEnvValue `
+    -Content $updatedRuntimeValue `
+    -Name "EMAIL_FROM" `
+    -Value $EmailFrom
+  $updatedRuntimeValue = Set-DotEnvValue `
+    -Content $updatedRuntimeValue `
+    -Name "RESEND_API_KEY" `
+    -Value $resendApiKey
+
+  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+  $runtimeSizeBytes = $utf8NoBom.GetByteCount($updatedRuntimeValue)
+
+  if ($runtimeSizeBytes -gt 4096) {
+    throw "La configuration runtime depasse la limite de 4 Kio d'un parametre Standard"
+  }
+
+  if ($updatedRuntimeValue -ceq $runtimeValue) {
+    Write-Host "[OK] Configuration e-mail runtime deja a jour" -ForegroundColor Green
+    return
+  }
+
+  $valueFileName = "blon-runtime-$([guid]::NewGuid().ToString('N')).env"
+  $valueFilePath = Join-Path $env:TEMP $valueFileName
+
+  try {
+    [System.IO.File]::WriteAllText(
+      $valueFilePath,
+      $updatedRuntimeValue,
+      $utf8NoBom
+    )
+
+    Push-Location $env:TEMP
+
+    try {
+      $putOutput = @(
+        aws ssm put-parameter `
+          --name $RuntimeParameterName `
+          --value "file://$valueFileName" `
+          --overwrite `
+          --region $Region `
+          --profile $Profile `
+          --output json `
+          --no-cli-pager
+      )
+      $putExitCode = $LASTEXITCODE
+    } finally {
+      Pop-Location
+    }
+
+    if ($putExitCode -ne 0) {
+      throw "Mise a jour du SecureString runtime impossible"
+    }
+
+    $putResult = (($putOutput -join "`n") | ConvertFrom-Json)
+    Write-Host "[OK] Configuration e-mail runtime activee, version $($putResult.Version)" -ForegroundColor Green
+  } finally {
+    Remove-Item -LiteralPath $valueFilePath -Force -ErrorAction SilentlyContinue
+    $runtimeValue = $null
+    $updatedRuntimeValue = $null
+    $resendApiKey = $null
+  }
 }
 
 $identityOutput = @(
@@ -98,6 +277,13 @@ $dnsIdentity = (($dnsIdentityOutput -join "`n") | ConvertFrom-Json)
 if ($dnsIdentity.Account -ne $expectedDnsAccountId) {
   throw "Mauvais compte DNS AWS : $($dnsIdentity.Account) au lieu de $expectedDnsAccountId"
 }
+
+Update-BibliothequeRuntimeParameter `
+  -RuntimeParameterName $runtimeParameterName `
+  -ResendApiKeyParameterName $resendApiKeyParameterName `
+  -EmailFrom $EmailFrom `
+  -Region $region `
+  -Profile $profile
 
 $stack = ConvertFrom-AwsJson `
   -AwsArguments @(
@@ -466,6 +652,7 @@ migration_image="__MIGRATION_IMAGE__"
 registry="__REGISTRY__"
 fqdn="__FQDN__"
 elastic_ip="__ELASTIC_IP__"
+runtime_parameter_name="__RUNTIME_PARAMETER_NAME__"
 runtime_env="/opt/blon/bibliotheque/runtime/app.env"
 deploy_dir="/opt/blon/bibliotheque/deploy/uat"
 backup_dir="/opt/blon/bibliotheque/backups"
@@ -525,12 +712,39 @@ pull_image() {
   echo "[OK] Image telechargee : $image"
 }
 
+refresh_runtime_configuration() {
+  local runtime_dir="/opt/blon/bibliotheque/runtime"
+  local temp_file=""
+
+  install -d -o root -g root -m 0750 "$runtime_dir"
+  temp_file="$(mktemp "$runtime_dir/.app.env.XXXXXX")"
+  trap 'rm -f "$temp_file"' EXIT HUP INT TERM
+
+  aws ssm get-parameter \
+    --name "$runtime_parameter_name" \
+    --with-decryption \
+    --query Parameter.Value \
+    --output text \
+    --region "$region" \
+    > "$temp_file"
+
+  [[ -s "$temp_file" ]] || fail "Le SecureString runtime recupere est vide"
+  chown root:root "$temp_file"
+  chmod 0600 "$temp_file"
+  mv -f "$temp_file" "$runtime_env"
+  trap - EXIT HUP INT TERM
+
+  echo "[OK] Configuration runtime rechargee depuis Parameter Store"
+}
+
 command -v docker >/dev/null 2>&1 || fail "Docker est absent"
 command -v aws >/dev/null 2>&1 || fail "AWS CLI est absent"
 command -v base64 >/dev/null 2>&1 || fail "base64 est absent"
 command -v curl >/dev/null 2>&1 || fail "curl est absent"
 systemctl is-active --quiet docker.service || fail "Docker n'est pas actif"
 docker compose version >/dev/null
+
+refresh_runtime_configuration
 
 [[ -s "$runtime_env" ]] || fail "Le fichier runtime est absent ou vide"
 [[ "$(stat -c '%U:%G' "$runtime_env")" == "root:root" ]] || fail "Le proprietaire du fichier runtime est incorrect"
@@ -551,10 +765,13 @@ required_keys=(
   HOSTNAME
   PUBLIC_SIGNUP_ENABLED
   EMAIL_ENABLED
+  EMAIL_FROM
+  RESEND_API_KEY
 )
 
 for key in "${required_keys[@]}"; do
-  grep -qE "^${key}=.+$" "$runtime_env" || fail "Variable runtime absente ou vide : $key"
+  match_count="$(grep -cE "^${key}=.+$" "$runtime_env" || true)"
+  [[ "$match_count" -eq 1 ]] || fail "Variable runtime absente, vide ou dupliquee : $key"
 done
 
 grep -qE '^DATABASE_URL=postgresql://.+@postgres:5432/.+$' "$runtime_env" || fail "DATABASE_URL ne cible pas postgres:5432"
@@ -563,7 +780,9 @@ grep -qE "^TRUSTED_ORIGINS=https://${fqdn}[[:space:]]*$" "$runtime_env" || fail 
 grep -qE "^NEXT_PUBLIC_APP_URL=https://${fqdn}[[:space:]]*$" "$runtime_env" || fail "NEXT_PUBLIC_APP_URL est incorrecte"
 grep -qE '^NODE_ENV=production[[:space:]]*$' "$runtime_env" || fail "NODE_ENV doit valoir production"
 grep -qE '^PUBLIC_SIGNUP_ENABLED=false[[:space:]]*$' "$runtime_env" || fail "PUBLIC_SIGNUP_ENABLED doit valoir false"
-grep -qE '^EMAIL_ENABLED=false[[:space:]]*$' "$runtime_env" || fail "EMAIL_ENABLED doit valoir false pour ce premier deploiement"
+grep -qE '^EMAIL_ENABLED=true[[:space:]]*$' "$runtime_env" || fail "EMAIL_ENABLED doit valoir true"
+grep -qE '^EMAIL_FROM=[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+[[:space:]]*$' "$runtime_env" || fail "EMAIL_FROM est incorrecte"
+grep -qE '^RESEND_API_KEY=re_[^[:space:]]+[[:space:]]*$' "$runtime_env" || fail "RESEND_API_KEY est incorrecte"
 
 available_kib="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
 free_kib="$(df --output=avail / | tail -n 1 | tr -d ' ')"
@@ -677,6 +896,7 @@ $replacements = [ordered]@{
   "__REGISTRY__"        = $registry
   "__FQDN__"            = $fqdn
   "__ELASTIC_IP__"      = $elasticIp
+  "__RUNTIME_PARAMETER_NAME__" = $runtimeParameterName
   "__COMPOSE_B64__"     = $composeBase64
   "__CADDY_B64__"       = $caddyBase64
 }
