@@ -1,5 +1,5 @@
 # EBLON Bibliotheque - deploiement UAT AWS NonProd
-# Images applicatives immuables : commit bbf5bc87e09f
+# Images applicatives immuables : commit 920b1581692d
 # Execution : PowerShell depuis n'importe quel repertoire du poste local.
 
 [CmdletBinding()]
@@ -21,8 +21,8 @@ $stackName         = "blon-nonprod-core"
 $expectedAccountId = "273956034614"
 $expectedDnsAccountId = "268140507002"
 $repositoryName    = "blon/eblon-bibliotheque"
-$runtimeTag        = "bbf5bc87e09f-runtime-v2-amd64"
-$migrationTag      = "bbf5bc87e09f-migration-v2-amd64"
+$runtimeTag        = "920b1581692d-runtime-amd64"
+$migrationTag      = "920b1581692d-migration-amd64"
 $publicSignupValue = if ($EnablePublicSignup) { "true" } else { "false" }
 $domain            = "blon-enterprises.com"
 $fqdn              = "uat.biblio.blon-enterprises.com"
@@ -351,7 +351,12 @@ foreach ($tag in @($runtimeTag, $migrationTag)) {
 
   $imageDetail = @($imageDetails.imageDetails)[0]
 
-  if ($imageDetail.imageManifestMediaType -ne "application/vnd.docker.distribution.manifest.v2+json") {
+  $allowedManifestTypes = @(
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.manifest.v1+json"
+  )
+
+  if ($imageDetail.imageManifestMediaType -notin $allowedManifestTypes) {
     throw "Type de manifeste incorrect pour $tag : $($imageDetail.imageManifestMediaType)"
   }
 
@@ -972,7 +977,7 @@ $commands += @(
 $ssmRequest = @{
   DocumentName = "AWS-RunShellScript"
   InstanceIds = @($instanceId)
-  Comment = "Deploy EBLON Bibliotheque UAT bbf5bc87e09f"
+  Comment = "Deploy EBLON Bibliotheque UAT 920b1581692d"
   TimeoutSeconds = 600
   Parameters = @{
     commands = $commands
