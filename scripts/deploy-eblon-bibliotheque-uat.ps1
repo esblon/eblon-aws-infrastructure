@@ -1,11 +1,13 @@
 # EBLON Bibliotheque - deploiement UAT AWS NonProd
-# Images applicatives immuables : commit 40f9c67db3dc
+# Images applicatives immuables : commit dcb98c1a01a0
 # Execution : PowerShell depuis n'importe quel repertoire du poste local.
 
 [CmdletBinding()]
 param(
   [ValidatePattern('^[^@\s]+@[^@\s]+\.[^@\s]+$')]
-  [string] $EmailFrom = "bibliotheque@blon-enterprises.com"
+  [string] $EmailFrom = "bibliotheque@blon-enterprises.com",
+
+  [switch] $EnablePublicSignup
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,8 +21,9 @@ $stackName         = "blon-nonprod-core"
 $expectedAccountId = "273956034614"
 $expectedDnsAccountId = "268140507002"
 $repositoryName    = "blon/eblon-bibliotheque"
-$runtimeTag        = "40f9c67db3dc-runtime-amd64"
-$migrationTag      = "40f9c67db3dc-migration-amd64"
+$runtimeTag        = "dcb98c1a01a0-runtime-amd64"
+$migrationTag      = "dcb98c1a01a0-migration-amd64"
+$publicSignupValue = if ($EnablePublicSignup) { "true" } else { "false" }
 $domain            = "blon-enterprises.com"
 $fqdn              = "uat.biblio.blon-enterprises.com"
 $runtimeParameterName = "/blon/nonprod/bibliotheque/runtime/app-env"
@@ -100,6 +103,10 @@ function Update-BibliothequeRuntimeParameter {
     [string] $EmailFrom,
 
     [Parameter(Mandatory = $true)]
+    [ValidateSet("true", "false")]
+    [string] $PublicSignupEnabled,
+
+    [Parameter(Mandatory = $true)]
     [string] $Region,
 
     [Parameter(Mandatory = $true)]
@@ -161,6 +168,10 @@ function Update-BibliothequeRuntimeParameter {
     -Content $updatedRuntimeValue `
     -Name "RESEND_API_KEY" `
     -Value $resendApiKey
+  $updatedRuntimeValue = Set-DotEnvValue `
+    -Content $updatedRuntimeValue `
+    -Name "PUBLIC_SIGNUP_ENABLED" `
+    -Value $PublicSignupEnabled
 
   $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
   $runtimeSizeBytes = $utf8NoBom.GetByteCount($updatedRuntimeValue)
@@ -282,6 +293,7 @@ Update-BibliothequeRuntimeParameter `
   -RuntimeParameterName $runtimeParameterName `
   -ResendApiKeyParameterName $resendApiKeyParameterName `
   -EmailFrom $EmailFrom `
+  -PublicSignupEnabled $publicSignupValue `
   -Region $region `
   -Profile $profile
 
@@ -339,7 +351,12 @@ foreach ($tag in @($runtimeTag, $migrationTag)) {
 
   $imageDetail = @($imageDetails.imageDetails)[0]
 
-  if ($imageDetail.imageManifestMediaType -ne "application/vnd.docker.distribution.manifest.v2+json") {
+  $allowedManifestTypes = @(
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.manifest.v1+json"
+  )
+
+  if ($imageDetail.imageManifestMediaType -notin $allowedManifestTypes) {
     throw "Type de manifeste incorrect pour $tag : $($imageDetail.imageManifestMediaType)"
   }
 
@@ -779,7 +796,7 @@ grep -qE "^BETTER_AUTH_URL=https://${fqdn}[[:space:]]*$" "$runtime_env" || fail 
 grep -qE "^TRUSTED_ORIGINS=https://${fqdn}[[:space:]]*$" "$runtime_env" || fail "TRUSTED_ORIGINS est incorrecte"
 grep -qE "^NEXT_PUBLIC_APP_URL=https://${fqdn}[[:space:]]*$" "$runtime_env" || fail "NEXT_PUBLIC_APP_URL est incorrecte"
 grep -qE '^NODE_ENV=production[[:space:]]*$' "$runtime_env" || fail "NODE_ENV doit valoir production"
-grep -qE '^PUBLIC_SIGNUP_ENABLED=false[[:space:]]*$' "$runtime_env" || fail "PUBLIC_SIGNUP_ENABLED doit valoir false"
+grep -qE '^PUBLIC_SIGNUP_ENABLED=__PUBLIC_SIGNUP_ENABLED__[[:space:]]*$' "$runtime_env" || fail "PUBLIC_SIGNUP_ENABLED doit valoir __PUBLIC_SIGNUP_ENABLED__"
 grep -qE '^EMAIL_ENABLED=true[[:space:]]*$' "$runtime_env" || fail "EMAIL_ENABLED doit valoir true"
 grep -qE '^EMAIL_FROM=[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+[[:space:]]*$' "$runtime_env" || fail "EMAIL_FROM est incorrecte"
 grep -qE '^RESEND_API_KEY=re_[^[:space:]]+[[:space:]]*$' "$runtime_env" || fail "RESEND_API_KEY est incorrecte"
@@ -897,6 +914,7 @@ $replacements = [ordered]@{
   "__FQDN__"            = $fqdn
   "__ELASTIC_IP__"      = $elasticIp
   "__RUNTIME_PARAMETER_NAME__" = $runtimeParameterName
+  "__PUBLIC_SIGNUP_ENABLED__" = $publicSignupValue
   "__COMPOSE_B64__"     = $composeBase64
   "__CADDY_B64__"       = $caddyBase64
 }
@@ -959,7 +977,7 @@ $commands += @(
 $ssmRequest = @{
   DocumentName = "AWS-RunShellScript"
   InstanceIds = @($instanceId)
-  Comment = "Deploy EBLON Bibliotheque UAT 40f9c67db3dc"
+  Comment = "Deploy EBLON Bibliotheque UAT dcb98c1a01a0"
   TimeoutSeconds = 600
   Parameters = @{
     commands = $commands
