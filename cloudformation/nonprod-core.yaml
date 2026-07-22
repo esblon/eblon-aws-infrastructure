@@ -87,7 +87,33 @@ Parameters:
     MaxValue: 100
     Description: Taille en Gio du volume racine gp3.
 
+  Ec2SchedulerState:
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Description: Active ou desactive les planifications EC2 NonProd.
+
+  Ec2StartScheduleExpression:
+    Type: String
+    Default: "cron(0 7 * * ? *)"
+    Description: Demarrage quotidien de l'EC2 a 07h00.
+
+  Ec2StopScheduleExpression:
+    Type: String
+    Default: "cron(0 0 * * ? *)"
+    Description: Arret quotidien de l'EC2 a 00h00.
+
+  Ec2ScheduleTimezone:
+    Type: String
+    Default: Europe/Paris
+    Description: Fuseau IANA utilise pour les horaires EC2.
+    
 Resources:
+Conditions:
+  IsNonProd: !Equals [!Ref Environment, nonprod]
+  
   BibliothequeRepository:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
@@ -544,7 +570,128 @@ Resources:
           Value: platform
         - Key: "blon:managed-by"
           Value: cloudformation
+  NonProdOperationsScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Condition: IsNonProd
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-operations"
+      Tags:
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
 
+  Ec2SchedulerDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Condition: IsNonProd
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-ec2-scheduler-dlq"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  Ec2SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: IsNonProd
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-scheduler-ec2-role"
+      Description: Autorise EventBridge Scheduler a demarrer et arreter uniquement l'EC2 NonProd.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+                "aws:SourceArn": !GetAtt NonProdOperationsScheduleGroup.Arn
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-${Environment}-scheduler-ec2-start-stop"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: StartStopApplicationInstance
+                Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ApplicationInstance}"
+
+              - Sid: SendFailuresToSchedulerDlq
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt Ec2SchedulerDeadLetterQueue.Arn
+      Tags:
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
+  Ec2StartSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: IsNonProd
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-ec2-start"
+      Description: Demarrage quotidien de l'EC2 applicative BLON NonProd.
+      GroupName: !Ref NonProdOperationsScheduleGroup
+      State: !Ref Ec2SchedulerState
+      ScheduleExpression: !Ref Ec2StartScheduleExpression
+      ScheduleExpressionTimezone: !Ref Ec2ScheduleTimezone
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !Sub "arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:startInstances"
+        RoleArn: !GetAtt Ec2SchedulerExecutionRole.Arn
+        Input: !Sub '{"InstanceIds":["${ApplicationInstance}"]}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 3
+        DeadLetterConfig:
+          Arn: !GetAtt Ec2SchedulerDeadLetterQueue.Arn
+
+  Ec2StopSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: IsNonProd
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-ec2-stop"
+      Description: Arret quotidien propre de l'EC2 applicative BLON NonProd.
+      GroupName: !Ref NonProdOperationsScheduleGroup
+      State: !Ref Ec2SchedulerState
+      ScheduleExpression: !Ref Ec2StopScheduleExpression
+      ScheduleExpressionTimezone: !Ref Ec2ScheduleTimezone
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !Sub "arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:stopInstances"
+        RoleArn: !GetAtt Ec2SchedulerExecutionRole.Arn
+        Input: !Sub '{"InstanceIds":["${ApplicationInstance}"]}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 3
+        DeadLetterConfig:
+          Arn: !GetAtt Ec2SchedulerDeadLetterQueue.Arn
+          
 Outputs:
   BibliothequeRepositoryName:
     Description: Nom du depot ECR prive de l'application eblon-bibliotheque
@@ -613,3 +760,32 @@ Outputs:
   HTTPURL:
     Description: URL HTTP temporaire avant configuration Route 53 et HTTPS
     Value: !Sub "http://${ApplicationElasticIP}"
+  Ec2SchedulerGroupName:
+    Condition: IsNonProd
+    Description: Groupe EventBridge Scheduler des operations NonProd
+    Value: !Ref NonProdOperationsScheduleGroup
+
+  Ec2StartScheduleArn:
+    Condition: IsNonProd
+    Description: ARN de la planification de demarrage EC2
+    Value: !GetAtt Ec2StartSchedule.Arn
+
+  Ec2StopScheduleArn:
+    Condition: IsNonProd
+    Description: ARN de la planification d'arret EC2
+    Value: !GetAtt Ec2StopSchedule.Arn
+
+  Ec2SchedulerExecutionRoleArn:
+    Condition: IsNonProd
+    Description: ARN du role d'execution EventBridge Scheduler
+    Value: !GetAtt Ec2SchedulerExecutionRole.Arn
+
+  Ec2SchedulerDeadLetterQueueArn:
+    Condition: IsNonProd
+    Description: ARN de la DLQ du scheduler EC2
+    Value: !GetAtt Ec2SchedulerDeadLetterQueue.Arn
+
+  Ec2SchedulerDeadLetterQueueUrl:
+    Condition: IsNonProd
+    Description: URL de la DLQ du scheduler EC2
+    Value: !Ref Ec2SchedulerDeadLetterQueue
