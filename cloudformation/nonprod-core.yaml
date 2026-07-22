@@ -876,12 +876,12 @@ Outputs:
   Ec2StartScheduleArn:
     Condition: IsNonProd
     Description: ARN de la planification de demarrage EC2
-    Value: !GetAtt Ec2StartSchedule.Arn
+    Value: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ProjectName}-${Environment}-operations/${ProjectName}-${Environment}-ec2-start"
 
   Ec2StopScheduleArn:
     Condition: IsNonProd
     Description: ARN de la planification d'arret EC2
-    Value: !GetAtt Ec2StopSchedule.Arn
+    Value: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${ProjectName}-${Environment}-operations/${ProjectName}-${Environment}-ec2-stop"
 
   Ec2SchedulerExecutionRoleArn:
     Condition: IsNonProd
