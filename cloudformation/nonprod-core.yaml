@@ -130,6 +130,48 @@ Resources:
         - Key: "blon:managed-by"
           Value: cloudformation
 
+  Coiffeurs225Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${ProjectName}/isaac-proj-coiffeurs"
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageTagMutability: IMMUTABLE
+      EmptyOnDelete: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Conserver les 10 images les plus recentes",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: "blon:project"
+          Value: !Ref ProjectName
+        - Key: "blon:application"
+          Value: coiffeurs225
+        - Key: "blon:environment"
+          Value: !Ref Environment
+        - Key: "blon:owner"
+          Value: blon-enterprises
+        - Key: "blon:cost-center"
+          Value: platform
+        - Key: "blon:managed-by"
+          Value: cloudformation
+
   ECRRegistryScanningConfiguration:
     Type: AWS::ECR::RegistryScanningConfiguration
     Properties:
@@ -366,11 +408,23 @@ Resources:
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
                 Resource: !GetAtt BibliothequeRepository.Arn
+              - Sid: PullCoiffeurs225Images
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: !GetAtt Coiffeurs225Repository.Arn
               - Sid: ReadBibliothequeRuntimeConfiguration
                 Effect: Allow
                 Action:
                   - ssm:GetParameter
                 Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/blon/${Environment}/bibliotheque/runtime/app-env"
+              - Sid: ReadCoiffeurs225RuntimeConfiguration
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/blon/${Environment}/coiffeurs225/runtime/app-env"
       Tags:
         - Key: "blon:environment"
           Value: !Ref Environment
@@ -527,6 +581,44 @@ Resources:
           Values:
             - !Ref ApplicationInstance
 
+  Coiffeurs225RuntimeConfigAssociation:
+    Type: AWS::SSM::Association
+    DependsOn:
+      - EC2SSMRole
+    Properties:
+      AssociationName: !Sub "${ProjectName}-${Environment}-coiffeurs225-runtime-config"
+      Name: AWS-RunShellScript
+      Parameters:
+        commands:
+          - !Sub |-
+              set -euo pipefail
+
+              runtime_dir="/opt/blon/coiffeurs225/runtime"
+              install -d -o root -g root -m 0750 "$runtime_dir"
+
+              temp_file=$(mktemp "$runtime_dir/.app.env.XXXXXX")
+              trap 'rm -f "$temp_file"' EXIT HUP INT TERM
+
+              aws ssm get-parameter \
+                --name "/blon/${Environment}/coiffeurs225/runtime/app-env" \
+                --with-decryption \
+                --query Parameter.Value \
+                --output text \
+                --region "${AWS::Region}" \
+                > "$temp_file"
+
+              test -s "$temp_file"
+              chown root:root "$temp_file"
+              chmod 0600 "$temp_file"
+              mv -f "$temp_file" "$runtime_dir/app.env"
+              trap - EXIT HUP INT TERM
+
+              echo "Coiffeurs225 runtime configuration installed successfully."
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref ApplicationInstance
+
   ApplicationElasticIP:
     Type: AWS::EC2::EIP
     DependsOn: VPCGatewayAttachment
@@ -561,6 +653,22 @@ Outputs:
   BibliothequeRuntimeConfigAssociationId:
     Description: Identifiant de l'association State Manager preparant la configuration runtime de la bibliotheque
     Value: !Ref BibliothequeRuntimeConfigAssociation
+
+  Coiffeurs225RepositoryName:
+    Description: Nom du depot ECR prive de Coiffeurs225
+    Value: !Ref Coiffeurs225Repository
+
+  Coiffeurs225RepositoryUri:
+    Description: URI complete du depot ECR prive de Coiffeurs225
+    Value: !GetAtt Coiffeurs225Repository.RepositoryUri
+
+  Coiffeurs225RepositoryArn:
+    Description: ARN du depot ECR prive de Coiffeurs225
+    Value: !GetAtt Coiffeurs225Repository.Arn
+
+  Coiffeurs225RuntimeConfigAssociationId:
+    Description: Identifiant de l'association State Manager preparant la configuration runtime de Coiffeurs225
+    Value: !Ref Coiffeurs225RuntimeConfigAssociation
 
   VpcId:
     Description: Identifiant du VPC BLON NonProd
