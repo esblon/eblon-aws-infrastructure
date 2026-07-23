@@ -112,7 +112,7 @@ Parameters:
 
 Conditions:
   IsNonProd: !Equals [!Ref Environment, nonprod]
-  
+
 Resources:
   BibliothequeRepository:
     Type: AWS::ECR::Repository
@@ -783,7 +783,7 @@ Resources:
           MaximumRetryAttempts: 3
         DeadLetterConfig:
           Arn: !GetAtt Ec2SchedulerDeadLetterQueue.Arn
-          
+
 Outputs:
   BibliothequeRepositoryName:
     Description: Nom du depot ECR prive de l'application eblon-bibliotheque
