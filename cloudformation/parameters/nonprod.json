@@ -38,5 +38,21 @@
   {
     "ParameterKey": "RootVolumeSize",
     "ParameterValue": "30"
+  },
+    {
+    "ParameterKey": "Ec2SchedulerState",
+    "ParameterValue": "ENABLED"
+  },
+  {
+    "ParameterKey": "Ec2StartScheduleExpression",
+    "ParameterValue": "cron(0 7 * * ? *)"
+  },
+  {
+    "ParameterKey": "Ec2StopScheduleExpression",
+    "ParameterValue": "cron(0 0 * * ? *)"
+  },
+  {
+    "ParameterKey": "Ec2ScheduleTimezone",
+    "ParameterValue": "Europe/Paris"
   }
 ]
