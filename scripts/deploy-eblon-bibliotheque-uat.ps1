@@ -1,5 +1,5 @@
 # EBLON Bibliotheque - deploiement UAT AWS NonProd
-# Images applicatives immuables : commit 6abad53
+# Images applicatives immuables : commit 7045f3e
 # Execution : PowerShell depuis n'importe quel repertoire du poste local.
 
 [CmdletBinding()]
@@ -21,8 +21,8 @@ $stackName         = "blon-nonprod-core"
 $expectedAccountId = "273956034614"
 $expectedDnsAccountId = "268140507002"
 $repositoryName    = "blon/eblon-bibliotheque"
-$runtimeTag        = "6abad53-runtime-amd64"
-$migrationTag      = "6abad53-migration-amd64"
+$runtimeTag        = "7045f3e-runtime-amd64"
+$migrationTag      = "7045f3e-migration-amd64"
 $publicSignupValue = if ($EnablePublicSignup) { "true" } else { "false" }
 $domain            = "blon-enterprises.com"
 $fqdn              = "uat.biblio.blon-enterprises.com"
@@ -977,7 +977,7 @@ $commands += @(
 $ssmRequest = @{
   DocumentName = "AWS-RunShellScript"
   InstanceIds = @($instanceId)
-  Comment = "Deploy EBLON Bibliotheque UAT 6abad53"
+  Comment = "Deploy EBLON Bibliotheque UAT 7045f3e"
   TimeoutSeconds = 600
   Parameters = @{
     commands = $commands
