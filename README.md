@@ -21,9 +21,14 @@ AWS Europe (Paris), `eu-west-3`.
 - un volume EBS `gp3` chiffre de 30 Gio ;
 - une Elastic IP associee a l'EC2.
 - un depot ECR prive `blon/eblon-bibliotheque` chiffre avec AES256 ;
+- un depot ECR prive `blon/isaac-proj-coiffeurs` chiffre avec AES256 ;
 - des tags d'image immuables et une politique conservant les 10 images les plus recentes ;
 - une analyse ECR BASIC a chaque push pour les depots `blon/*` ;
 - des permissions EC2 limitees au telechargement depuis ce seul depot ECR.
+- des permissions EC2 limitees au telechargement depuis les deux depots ECR
+  applicatifs ;
+- une association SSM installant la configuration runtime Coiffeurs225 depuis
+  `/blon/nonprod/coiffeurs225/runtime/app-env`.
 
 Le template n'ouvre pas SSH 22. L'administration se fait avec AWS Systems
 Manager Session Manager.
@@ -61,6 +66,36 @@ filtre `blon/*`. Cette configuration agit au niveau du registre ECR du compte.
 L'instance EC2 possede seulement `GetAuthorizationToken` et les trois actions de
 pull necessaires, limitees a l'ARN du depot pour les operations sur les images.
 Elle ne dispose d'aucune permission de push.
+
+## Socle UAT Coiffeurs225
+
+Coiffeurs225 reutilise volontairement l'EC2 `blon-nonprod-app-01`, le moteur
+PostgreSQL et Caddy. La charge cible est limitee a trois testeurs, generalement
+non simultanes. Aucun RDS ni seconde EC2 n'est cree a ce stade.
+
+L'application possede toutefois ses propres frontieres :
+
+- depot ECR `blon/isaac-proj-coiffeurs` ;
+- configuration runtime
+  `/blon/nonprod/coiffeurs225/runtime/app-env` ;
+- repertoire `/opt/blon/coiffeurs225` sur l'EC2 ;
+- base logique PostgreSQL `coiffeurs225` ;
+- role PostgreSQL `coiffeurs225_app` ;
+- migrations et domaine UAT dedies.
+
+La base existante de la Bibliotheque ne doit pas etre renommee. Coiffeurs225
+utilise une seconde base logique dans le meme conteneur PostgreSQL. Cette
+separation conserve des permissions, migrations, sauvegardes et extractions
+independantes sans ajouter de cout d'infrastructure significatif.
+
+Le template ne cree pas le SecureString, car sa valeur contient des secrets. Il
+doit exister avant l'execution du Change Set. Ne jamais fournir sa valeur dans
+Git ou dans la description d'un Change Set.
+
+La creation ECR et l'association runtime ne deploient pas encore l'application.
+Le Dockerfile, l'image immuable, l'initialisation idempotente de la base, les
+limites de ressources Compose et le virtual host Caddy doivent etre valides
+avant le premier deploiement UAT.
 
 `DeletionPolicy: Retain` et `UpdateReplacePolicy: Retain` conservent le depot et
 ses images si la ressource est retiree de la stack ou remplacee. `EmptyOnDelete`
